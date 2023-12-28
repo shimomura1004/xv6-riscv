@@ -2,6 +2,9 @@
         # and causes each hart (i.e. CPU) to jump there.
         # kernel.ld causes the following code to
         # be placed at 0x80000000.
+        # 電源投入後、すべての CPU コアがこのコードから実行される
+        # ただし cpuid=0 の hart 以外は初期化が終わるまで
+        # ウェイトするようになっている (main.c/main でビジーループしている)
 .section .text
 .global _entry
 _entry:

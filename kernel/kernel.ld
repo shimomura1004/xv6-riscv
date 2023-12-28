@@ -1,6 +1,9 @@
 OUTPUT_ARCH( "riscv" )
 ENTRY( _entry )
 
+/* カーネルイメージのリンカスクリプト */
+/* 0x80000000 は RISC-V で DRAM が割り当てられている */
+
 SECTIONS
 {
   /*

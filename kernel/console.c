@@ -181,8 +181,10 @@ consoleintr(int c)
 void
 consoleinit(void)
 {
+  // スピンロック用の変数の初期化
   initlock(&cons.lock, "cons");
 
+  // 実際にシリアルでデータを入出力する uart 関係のレジスタを操作し初期化する
   uartinit();
 
   // connect read and write system calls

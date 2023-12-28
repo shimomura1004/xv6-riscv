@@ -20,6 +20,8 @@ extern void timervec();
 void
 start()
 {
+  // mret 命令で main.c/main にジャンプできるように手動でレジスタを準備していく
+
   // set M Previous Privilege mode to Supervisor, for mret.
   unsigned long x = r_mstatus();
   x &= ~MSTATUS_MPP_MASK;
@@ -33,11 +35,18 @@ start()
   // disable paging for now.
   w_satp(0);
 
+  // risc-v では、普通は割込みはマシンモードでしか処理できない
+  // この委譲処理によりユーザモード時に発生した割込みを直接スーパーバイザモードで処理できる
   // delegate all interrupts and exceptions to supervisor mode.
   w_medeleg(0xffff);
   w_mideleg(0xffff);
+  // csrw 命令で sie レジスタ(スーバーバイザモードの割り込み設定)を変更
   w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
 
+  // PMP(physical memory protection)
+  // メモリを領域に区切り、そこへのアクセス制限ができる機能
+  // 複数あるが、xv6 では全体をひとつの領域にまとめた上で、
+  // スーバーバイザモードからすべてアクセスできるようにしている
   // configure Physical Memory Protection to give supervisor mode
   // access to all of physical memory.
   w_pmpaddr0(0x3fffffffffffffull);

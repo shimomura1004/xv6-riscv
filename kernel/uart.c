@@ -10,6 +10,7 @@
 #include "proc.h"
 #include "defs.h"
 
+// UART のレジスタがマップされたアドレスを保持する
 // the UART control registers are memory-mapped
 // at address UART0. this macro returns the
 // address of one of the registers.

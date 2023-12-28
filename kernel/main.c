@@ -6,24 +6,34 @@
 
 volatile static int started = 0;
 
+// start.c/start から mret で main に "戻ってくる" ので、
+// OS のメイン初期化処理はスーパーバイザモードで実行されることになる
 // start() jumps here in supervisor mode on all CPUs.
 void
 main()
 {
+  // main にはすべての cpu はジャンプしてくるが、初期化処理を行うのは
+  // cpuid が 0 のものひとつだけ
   if(cpuid() == 0){
+    // コンソール(uart)を初期化
     consoleinit();
+    // printf の初期化(ロック変数を初期化しているだけ)
     printfinit();
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
+
     kinit();         // physical page allocator
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
+
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector
+
     plicinit();      // set up interrupt controller
     plicinithart();  // ask PLIC for device interrupts
+    
     binit();         // buffer cache
     iinit();         // inode table
     fileinit();      // file table
