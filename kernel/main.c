@@ -25,7 +25,10 @@ main()
 
     // 物理メモリを freelist にすべてつなげる
     kinit();         // physical page allocator
+    // デバイスやカーネルの動作に必要なページを登録する
+    // ここまではページングが無効なので直接物理アドレスにアクセスできている
     kvminit();       // create kernel page table
+    // この CPU のページングを有効にする
     kvminithart();   // turn on paging
 
     procinit();      // process table

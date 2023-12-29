@@ -26,6 +26,7 @@ kvmmake(void)
   kpgtbl = (pagetable_t) kalloc();
   memset(kpgtbl, 0, PGSIZE);
 
+  // 各種ハードウェアを PTE に追加していく
   // uart registers
   kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
@@ -38,13 +39,16 @@ kvmmake(void)
   // map kernel text executable and read-only.
   kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
+  // カーネルのデータ領域
   // map kernel data and the physical RAM we'll make use of.
   kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
+  // 仮想アドレスの一番最後に trampoline のコードをマップ
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
+  // 各プロセス用のページテーブル用ページを確保し、カーネルの仮想アドレス空間にマップする
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
   
@@ -63,9 +67,12 @@ kvminit(void)
 void
 kvminithart()
 {
+  // sfence.vma 命令を使い、直前にやっていたページテーブル関連の処理が
+  // 終わっていることを確実にする
   // wait for any previous writes to the page table memory to finish.
   sfence_vma();
 
+  // satp レジスタに値をセットして(この CPU の)ページングを有効化
   w_satp(MAKE_SATP(kernel_pagetable));
 
   // flush stale entries from the TLB.
@@ -192,11 +199,15 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   // 渡された仮想アドレスやサイズはページ境界とは限らないので丸める
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
+  // 指定された範囲をすべてマップしていく
   for(;;){
+    // 指定された仮想アドレスを含むページの pte を取得
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
+    // 既に使われているページの場合異常終了
     if(*pte & PTE_V)
       panic("mappages: remap");
+    // pte にデータを書き込み登録
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;

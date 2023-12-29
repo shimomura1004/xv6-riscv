@@ -34,11 +34,20 @@ proc_mapstacks(pagetable_t kpgtbl)
 {
   struct proc *p;
   
+  // xv6 ではプロセス数は NPROC で固定されており、管理領域も最初に準備される
+  // すべてのプロセス用管理領域に対してループで初期化していく
   for(p = proc; p < &proc[NPROC]; p++) {
+    // まずページテーブルを用意
     char *pa = kalloc();
     if(pa == 0)
       panic("kalloc");
+    // 仮想アドレスの後ろのほうに各プロセスのページテーブル用ページをマップする
+    // それぞれのページの間に使っていないページが入っている
+    // (KSTACK で 2*PGSIZE となっているので1ページずつ分ずつあいている)
     uint64 va = KSTACK((int) (p - proc));
+
+    // カーネルのページテーブルにはすべてのプロセスのページテーブルが含まれているので
+    // プロセス切り替え時の操作などが行える
     kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
 }
