@@ -15,12 +15,14 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+// xv6 では、カーネルはダイレクトマッピング(物理アドレス=仮想アドレス)になっている
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
 {
   pagetable_t kpgtbl;
 
+  // メモリから1ページ割り当てて最上位のページテーブルを作る
   kpgtbl = (pagetable_t) kalloc();
   memset(kpgtbl, 0, PGSIZE);
 
@@ -70,6 +72,30 @@ kvminithart()
   sfence_vma();
 }
 
+// RISC-V Sv39 での仮想アドレス(64bit)は以下のように解釈される
+// va: [EXT: 25bit][L2: 9bit][L1: 9bit][L0: 9bit][Offset: 12bit]
+//   仮想アドレスの上位25ビットは使用されない
+//   L2~L0 のインデックスととオフセットで合計39ビット
+// 
+// 仮想アドレスを物理アドレスに変換するには PTE をたどっていく必要がある
+// PTE の構成は以下
+// pte: [Reserved: 10bit][Physical Page Number(PPN): 44bit][Flags: 10bit]
+//   Flags:
+//     RSW(reserved for supervisor software)
+//     D: Dirty
+//     A: Accessed
+//     G: Global
+//     U: User
+//     X: Executable
+//     W: Writeable
+//     R: Readable
+//     V: Valid
+//
+// 仮想アドレスを物理アドレスに変換するには、L2~L0 のインデックスで PTE を3回探し、
+// 最後にオフセットを加算して物理アドレスを作ることになる
+// PTE2PA/PA2PTE で 10bit/12bit シフトしているのは、
+// PTE のフラグ部分(10bit)を捨てて、物理アドレスのオフセット分(12bit)ずらすため
+
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page-table pages.
@@ -88,14 +114,28 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   if(va >= MAXVA)
     panic("walk");
 
+  // risc-v ハードウェア(Sv39)がやるのと同じことをやっている
   for(int level = 2; level > 0; level--) {
+    // 仮想アドレスからレベルごとのインデックスを取り出し対応する pte を見つける
     pte_t *pte = &pagetable[PX(level, va)];
+    // 見ているエントリが valid かどうかを確認
     if(*pte & PTE_V) {
+      // 既に確保されているなら次のレベルに潜る
+      // pte の 44~10bit に次の pte の物理アドレスが書かれているので
+      // PTE2PA でまず10bit右ずらしてフラグ部分を消し、
+      // そのあと12bit左にずらすことで、
+      // 次の pte を含むページテーブルの物理アドレスが得られる
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
+      // alloc は、エントリがなかった場合に新たに確保するかを表す引数？
+      // alloc が 0 だったり、kalloc に失敗した場合はエラー終了
+      // まずページテーブル用のページを確保し、その物理アドレスを pagetable で保持
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
+      // 確保したページテーブル用ページの物理アドレスを変換して PTE にする
+      // PTE の valid フラグを立て、エントリに追加する
+      // これで次のループのとき、ちゃんとメモリ確保された場所で処理が行われる
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
@@ -143,11 +183,13 @@ int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
   uint64 a, last;
+  // ひとつのエントリは8バイトのデータなので uint64_t を使っている
   pte_t *pte;
 
   if(size == 0)
     panic("mappages: size");
   
+  // 渡された仮想アドレスやサイズはページ境界とは限らないので丸める
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
   for(;;){

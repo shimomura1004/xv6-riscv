@@ -35,6 +35,7 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
+  // 指定された領域をページごとに区切って freelist に追加する
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }
@@ -48,15 +49,18 @@ kfree(void *pa)
 {
   struct run *r;
 
+  // ページサイズの境界でないアドレスや、範囲外のアドレスが指定されたら panic
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
+  // 使っていないページをそのままリンクリストの要素としてつなげている
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
+  // 今までの先頭を r の next にし、先頭に r を追加する
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -71,6 +75,7 @@ kalloc(void)
   struct run *r;
 
   acquire(&kmem.lock);
+  // freelist の先頭から1ページ取り出す
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
