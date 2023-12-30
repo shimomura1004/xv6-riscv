@@ -38,6 +38,8 @@ memmove(void *dst, const void *src, uint n)
   
   s = src;
   d = dst;
+  // コピー先がコピー元のアドレスと重なっている場合は
+  // コピー前のデータを上書きしてしまわないようにコピー順(向き)を変える
   if(s < d && s + n > d){
     s += n;
     d += n;

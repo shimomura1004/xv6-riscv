@@ -161,11 +161,13 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(va >= MAXVA)
     return 0;
 
+  // 渡されたページテーブルの階層を辿って指定された仮想アドレスに対応するページを探す
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
   if((*pte & PTE_V) == 0)
     return 0;
+  // ユーザプロセス用のページじゃなかったらエラー
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -399,10 +401,12 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
+  // 指定された仮想アドレスに対応するページを探して
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
+  // ユーザにアクセスできないよう U ビットをクリアする
   *pte &= ~PTE_U;
 }
 
@@ -415,15 +419,28 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
 
   while(len > 0){
+    // 宛先のユーザ空間での仮想アドレスが含まれるページの先頭アドレスを計算
     va0 = PGROUNDDOWN(dstva);
+    // 対応するメモリページを見つけ物理アドレスを取得する
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    // dstva - va0 は、コピー先の仮想アドレス(dstva)のオフセット
+    // ページをまたいでコピーできないので dstva からページ末尾までのサイズを計算
     n = PGSIZE - (dstva - va0);
+    // ページをまたがない場合は len までで終わる
     if(n > len)
       n = len;
+    // dstva - va0 でオフセットを計算し、物理アドレス pa0 に加算して
+    // 宛先の物理アドレスを求める
+    // src にはそのまま渡されてきた文字列の(仮想)アドレスを渡している
+    // todo: exec から呼ばれている
+    //       もうページングは有効になっているはずだが、
+    //       memmove に物理アドレスを渡しているがいいのか？
+    //       fork してから呼ばれるから、そっちを先にみたほうがいいかも
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
+    // 次のページに移動し同じことを続ける
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
