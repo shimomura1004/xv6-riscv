@@ -31,8 +31,11 @@ main()
     // この CPU のページングを有効にする
     kvminithart();   // turn on paging
 
+    // プロセス構造体の初期化
     procinit();      // process table
+    // トラップ用のロックの初期化だけ
     trapinit();      // trap vectors
+    // トラップベクタを設定する
     trapinithart();  // install kernel trap vector
 
     plicinit();      // set up interrupt controller

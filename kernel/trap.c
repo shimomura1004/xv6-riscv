@@ -26,6 +26,8 @@ trapinit(void)
 void
 trapinithart(void)
 {
+  // 割込み・例外発生時のジャンプ先を指定
+  // xv6 の割込み処理はダイレクトモードなのか？
   w_stvec((uint64)kernelvec);
 }
 

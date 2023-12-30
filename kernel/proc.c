@@ -60,8 +60,11 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  // すべてのプロセスに対してループ
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
+      // プロセス構造体を初期化するだけ
+      // 特にスタック用のページの確保などはしない
       p->state = UNUSED;
       p->kstack = KSTACK((int) (p - proc));
   }
