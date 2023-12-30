@@ -230,6 +230,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    // 開放したい仮想アドレスに紐づいているページを探す
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
@@ -240,10 +241,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    // エントリを 0 クリアしマッピングから外す
     *pte = 0;
   }
 }
 
+// kalloc で1ページ割り当てるだけ
 // create an empty user page table.
 // returns 0 if out of memory.
 pagetable_t
@@ -284,14 +287,18 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   if(newsz < oldsz)
     return oldsz;
 
+  // 変更前の使用量を計算
   oldsz = PGROUNDUP(oldsz);
+  // 足りない分をループで1ページずつ追加していく
   for(a = oldsz; a < newsz; a += PGSIZE){
+    // 1ページ確保し mem にその物理アドレスを入れる
     mem = kalloc();
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
+    // 仮想アドレス上連続になるように、確保したページを map する
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
@@ -311,6 +318,7 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   if(newsz >= oldsz)
     return oldsz;
 
+  // 新旧のサイズで必要なメモリページ数を比較し、もし減るようであれば unmap する
   if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
     int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
     uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);

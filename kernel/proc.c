@@ -266,20 +266,25 @@ userinit(void)
   release(&p->lock);
 }
 
+// sbrk はこの関数を使って実装されている
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
 int
 growproc(int n)
 {
   uint64 sz;
+  // growproc を呼んだプロセスの proc 構造体を取得
+  // ページを取得・開放し、proc 構造体に含まれるページテーブルを更新する
   struct proc *p = myproc();
 
   sz = p->sz;
   if(n > 0){
+    // サイズを増やす
     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
       return -1;
     }
   } else if(n < 0){
+    // サイズを減らす
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;

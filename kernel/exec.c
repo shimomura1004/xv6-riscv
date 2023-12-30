@@ -33,6 +33,7 @@ exec(char *path, char **argv)
 
   begin_op();
 
+  // ファイルを開く
   if((ip = namei(path)) == 0){
     end_op();
     return -1;
@@ -46,6 +47,9 @@ exec(char *path, char **argv)
   if(elf.magic != ELF_MAGIC)
     goto bad;
 
+  // exec のタイミングで、このプロセス用にページテーブルを作る
+  // (main の procinit 時にはページの確保はしていない)
+  // まだアプリ用にメモリは確保しないが trampoline と trapframe はマップする
   if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
 
