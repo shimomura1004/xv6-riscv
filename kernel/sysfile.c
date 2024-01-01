@@ -434,6 +434,8 @@ sys_chdir(void)
 uint64
 sys_exec(void)
 {
+  // argv はカーネル内で確保しているので、仮想アドレスと物理アドレスが同じかも
+  // 配列自体はスタックに確保、中身は kalloc で確保
   char path[MAXPATH], *argv[MAXARG];
   int i;
   uint64 uargv, uarg;
@@ -454,6 +456,7 @@ sys_exec(void)
       argv[i] = 0;
       break;
     }
+    // 引数1つで1ページ使っている(システムコールの処理完了後すみやかに開放している)
     argv[i] = kalloc();
     if(argv[i] == 0)
       goto bad;
@@ -463,6 +466,7 @@ sys_exec(void)
 
   int ret = exec(path, argv);
 
+  // 引数用に確保したページをすべて開放
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
     kfree(argv[i]);
 

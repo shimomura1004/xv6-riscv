@@ -19,6 +19,14 @@ int flags2perm(int flags)
     return perm;
 }
 
+// exec の呼び出し順
+//   trampoline.S/uesrvec
+//     trap.c/usertrap
+//       syscall.c/syscall
+//         sysfile.c/sys_exec
+//           exec.c/exec
+//       trap.c/usertrapret
+//         trampoline.S/userret
 int
 exec(char *path, char **argv)
 {
@@ -109,6 +117,7 @@ exec(char *path, char **argv)
   uvmclear(pagetable, sz-2*PGSIZE);
   // スタックポインタは確保したページの最上位アドレスに指定
   // (スタックは上位から下位に向かって、つまり stack guard の方向に伸びていく)
+  // sp は、ユーザ側のアドレス空間の仮想アドレスなことに注意
   sp = sz;
   // stack guard との境界を stackbase とする
   stackbase = sp - PGSIZE;
@@ -140,9 +149,18 @@ exec(char *path, char **argv)
   if(sp < stackbase)
     goto bad;
   // 控えておいた引数の文字列のアドレスをスタックにすべてコピー
+  // argv には文字列そのものではなく、文字列へのポインタの配列が入っているため
   if(copyout(pagetable, sp, (char *)ustack, (argc+1)*sizeof(uint64)) < 0)
     goto bad;
 
+  // main 関数に return しないといけないので、RISC-V の calling convention を模擬
+  // トラップフレームに入れるのは、このあとスレッドの切り替えで復帰するときのため
+  // supervisor モードからの切り替えは trampoline.S/userret 内の sret による
+
+  // a1 には第二引数である argv (ポインタ配列の先頭アドレス)を入れる必要がある
+  // sp は今 argv の最下位(スタックの一番上)を指しているので、それを入れる
+  // 第一引数の argc にも値をセットする必要があるが、これは exec 関数の return で行われる
+  // RISC-V の calling convention では戻り値は a0 に入れられる
   // arguments to user main(argc, argv)
   // argc is returned via the system call return
   // value, which goes in a0.
@@ -164,6 +182,11 @@ exec(char *path, char **argv)
   // 新しいプログラムを実行できるようになったら、古いページを開放する
   proc_freepagetable(oldpagetable, oldsz);
 
+  // return すると a0 に argc の値が書かれる(calling convention)ので、
+  // 明示的に a0 にデータを入れる必要はない
+  // (最終的に syscall.c/syscall で trapframe->a0 に戻り値を入れている)
+  // またこの return ですぐにユーザプログラムに処理が移るのではなく、
+  // まず呼び出し元である sysfile.c/sys_exec に戻るので注意
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:

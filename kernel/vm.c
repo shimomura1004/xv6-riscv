@@ -421,6 +421,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     // 宛先のユーザ空間での仮想アドレスが含まれるページの先頭アドレスを計算
+    // (仮想アドレスなので物理アドレスに変換しないといけない)
     va0 = PGROUNDDOWN(dstva);
     // 対応するメモリページを見つけ物理アドレスを取得する
     pa0 = walkaddr(pagetable, va0);
@@ -434,12 +435,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       n = len;
     // dstva - va0 でオフセットを計算し、物理アドレス pa0 に加算して
     // 宛先の物理アドレスを求める
-    // src にはそのまま渡されてきた文字列の(仮想)アドレスを渡している
-    // todo: exec から呼ばれている
-    //       もうページングは有効になっているはずだが、
-    //       memmove に物理アドレスを渡しているがいいのか？
-    //       ダイレクトマッピングされている領域なんだと思うけど…
-    //       → むしろ src のほうはカーネル空間の仮想関数だから物理アドレスと同じ？
+    // src にはそのまま渡されてきた文字列の仮想アドレスを渡している
+    // (ただしカーネル空間の仮想アドレスなので物理アドレスと同じ)
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     // 次のページに移動し同じことを続ける
