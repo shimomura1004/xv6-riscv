@@ -35,10 +35,12 @@ main()
     procinit();      // process table
     // トラップ用のロックの初期化だけ
     trapinit();      // trap vectors
-    // トラップベクタを設定する
+    // トラップベクタ(stvec)を設定する
     trapinithart();  // install kernel trap vector
 
+    // plic のレジスタを操作し割込みの優先度を設定
     plicinit();      // set up interrupt controller
+    // 割込み許可レジスタを設定(RISC-V では CPU コアごとに設定される)
     plicinithart();  // ask PLIC for device interrupts
 
     binit();         // buffer cache

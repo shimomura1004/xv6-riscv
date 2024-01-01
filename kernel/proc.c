@@ -507,6 +507,7 @@ sched(void)
   int intena;
   struct proc *p = myproc();
 
+  // todo: このあたりの条件が必要なのはなぜか
   if(!holding(&p->lock))
     panic("sched p->lock");
   if(mycpu()->noff != 1)
@@ -516,9 +517,13 @@ sched(void)
   if(intr_get())
     panic("sched interruptible");
 
+  // intena は、割込みが有効かどうかを表すフラグ
   intena = mycpu()->intena;
+  // 控えていたレジスタを復元してプロセスを切り替え
   swtch(&p->context, &mycpu()->context);
   mycpu()->intena = intena;
+  // スタックポインタも復元されるので、return すると、
+  // 切り替え先のプロセスが sched を呼んだところに戻る
 }
 
 // Give up the CPU for one scheduling round.
@@ -527,6 +532,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+  // 今まで実行中だったプロセスステータスを実行可能にして、sched で切り替え
   p->state = RUNNABLE;
   sched();
   release(&p->lock);

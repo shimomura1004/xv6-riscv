@@ -439,6 +439,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     //       もうページングは有効になっているはずだが、
     //       memmove に物理アドレスを渡しているがいいのか？
     //       ダイレクトマッピングされている領域なんだと思うけど…
+    //       → むしろ src のほうはカーネル空間の仮想関数だから物理アドレスと同じ？
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     // 次のページに移動し同じことを続ける
