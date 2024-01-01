@@ -141,21 +141,28 @@ kerneltrap()
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
   
+  // カーネルの処理を実行中なので supervisor モードだったはず
+  // そうでなかった場合は異常終了
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
+  // カーネルの処理を実行中に発生した例外がデバイス割込みでなかった場合は
+  // カーネルの処理で異常が発生したということなので、諦めて panic する
   if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
+  // スケジューラ以外のカーネル処理(システムコールとか)を実行中だったら
+  // yield を呼び出して CPU を他のプロセスに譲る
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
     yield();
 
+  // 控えておいた sepc/sstatus レジスタを復帰
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_sepc(sepc);

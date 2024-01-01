@@ -101,6 +101,7 @@ myproc(void)
   return p;
 }
 
+// pid を1ずつインクリメントして返すだけ
 int
 allocpid()
 {
@@ -131,12 +132,16 @@ allocproc(void)
       release(&p->lock);
     }
   }
+  // xv6 では最大プロセス数は固定、空きがなければ失敗する
   return 0;
 
 found:
+  // 空いていたプロセス構造体に pid を入れ、ステータスを更新
   p->pid = allocpid();
   p->state = USED;
 
+  // trapframe は、トラップが発生した場合にレジスタを退避する領域
+  // この時点ではまだマップされていない、少し下の proc_pagettable でマップされる
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -144,6 +149,7 @@ found:
     return 0;
   }
 
+  // ユーザ用に空のページテーブルを作り、trampoline と trapframe をマップ
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){

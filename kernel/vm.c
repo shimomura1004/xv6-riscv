@@ -73,6 +73,7 @@ kvminithart()
   sfence_vma();
 
   // satp レジスタに値をセットして(この CPU の)ページングを有効化
+  // satp: supervisor address translation and protection
   w_satp(MAKE_SATP(kernel_pagetable));
 
   // flush stale entries from the TLB.
@@ -437,7 +438,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     // todo: exec から呼ばれている
     //       もうページングは有効になっているはずだが、
     //       memmove に物理アドレスを渡しているがいいのか？
-    //       fork してから呼ばれるから、そっちを先にみたほうがいいかも
+    //       ダイレクトマッピングされている領域なんだと思うけど…
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     // 次のページに移動し同じことを続ける
