@@ -87,6 +87,7 @@ kernelvec:
         # return to whatever we were doing in the kernel.
         sret
 
+        # タイマ割込みの処理は、対応するソフトウェア割込みを発生させて戻るだけ
         #
         # machine-mode timer interrupt.
         #

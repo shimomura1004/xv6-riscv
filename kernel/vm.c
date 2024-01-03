@@ -163,6 +163,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   // 渡されたページテーブルの階層を辿って指定された仮想アドレスに対応するページを探す
+  // セキュリティの観点で、このプロセスからアクセスできる領域か？を確認している
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
@@ -437,6 +438,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     // 宛先の物理アドレスを求める
     // src にはそのまま渡されてきた文字列の仮想アドレスを渡している
     // (ただしカーネル空間の仮想アドレスなので物理アドレスと同じ)
+    // カーネル空間では RAM 全体がダイレクトマッピングされているので
+    // 物理アドレスさえわかればアクセス可能
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     // 次のページに移動し同じことを続ける
@@ -472,6 +475,13 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   return 0;
 }
 
+// 文字列を引数に取るシステムコールを実装するために使う
+// システムコールは文字列ポインタを引数に取るが実体はユーザ空間の別のアドレスに存在する
+// そちらをカーネルからアクセスできるようにしないといけない
+// srcva はコピー元なので、ユーザ空間の仮想アドレス
+// dst はコピー先で、カーネル空間の仮想アドレス
+// srcva は、ユーザ空間のページテーブルを walkaddr して物理アドレスに変換する
+// カーネル空間では仮想アドレスと物理アドレスは同じなので dst は変換不要
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
 // until a '\0', or max.
@@ -483,7 +493,10 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   int got_null = 0;
 
   while(got_null == 0 && max > 0){
+    // ページテーブルを walkaddr するためにユーザ空間の仮想アドレス va0 を
+    // まず仮想アドレスが含まれるページ境界のアドレスに丸める
     va0 = PGROUNDDOWN(srcva);
+    // walkaddr で物理アドレスに変換
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -491,7 +504,12 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     if(n > max)
       n = max;
 
+    // 変換した物理アドレスからのオフセットを足し直して src の物理アドレスを得る
     char *p = (char *) (pa0 + (srcva - va0));
+    // 普通にコピー
+    // dst は仮想アドレスだがカーネル空間なので物理アドレスと同じ
+    // またカーネル空間ではすべての RAM がダイレクトマッピングされているので
+    // 物理アドレスさえわかれば特に気にせずメモリアクセスができる
     while(n > 0){
       if(*p == '\0'){
         *dst = '\0';

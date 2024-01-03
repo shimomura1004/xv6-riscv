@@ -63,6 +63,7 @@ start()
   asm volatile("mret");
 }
 
+// タイマ割込みはマシンモードでしか処理できない
 // arrange to receive timer interrupts.
 // they will arrive in machine mode at
 // at timervec in kernelvec.S,
@@ -74,16 +75,21 @@ timerinit()
   // each CPU has a separate source of timer interrupts.
   int id = r_mhartid();
 
+  // 10ms 後にタイマ割込みが入るようにレジスタを設定
+  // 割込みは kernelvec.S/timervec で処理され、さらに次の割込みのための設定を行う
+  // (タイムアウトが発生するたびに、次のタイムアウトの設定をしている)
   // ask the CLINT for a timer interrupt.
   int interval = 1000000; // cycles; about 1/10th second in qemu.
   *(uint64*)CLINT_MTIMECMP(id) = *(uint64*)CLINT_MTIME + interval;
 
+  // scratch レジスタが指す先に必要な情報を格納しておく(trapframe のようなもの)
   // prepare information in scratch[] for timervec.
   // scratch[0..2] : space for timervec to save registers.
   // scratch[3] : address of CLINT MTIMECMP register.
   // scratch[4] : desired interval (in cycles) between timer interrupts.
   uint64 *scratch = &timer_scratch[id][0];
   scratch[3] = CLINT_MTIMECMP(id);
+  // タイマ割込みのハンドラで次のタイマのタイミングを計算するために、インターバルも控えておく
   scratch[4] = interval;
   w_mscratch((uint64)scratch);
 

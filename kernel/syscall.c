@@ -19,6 +19,9 @@ fetchaddr(uint64 addr, uint64 *ip)
   return 0;
 }
 
+// 文字列を引数に取るシステムコールを実装するために使う
+// システムコールは文字列ポインタを引数に取るが実体はユーザ空間の別のアドレスに存在する
+// そちらをカーネルからアクセスできるようにしないといけない
 // Fetch the nul-terminated string at addr from the current process.
 // Returns length of string, not including nul, or -1 for error.
 int
@@ -30,6 +33,8 @@ fetchstr(uint64 addr, char *buf, int max)
   return strlen(buf);
 }
 
+// システムコール呼び出し時の引数を trapframe から取り出す関数
+// argint, argaddr, argstr は指定された型への変換も行う
 static uint64
 argraw(int n)
 {
