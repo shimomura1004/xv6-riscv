@@ -70,6 +70,7 @@ consolewrite(int user_src, uint64 src, int n)
   return i;
 }
 
+// コンソールのデバイスファイルから read すると、最終的にこの関数が呼ばれる
 //
 // user read()s from the console go here.
 // copy (up to) a whole input line to dst.
@@ -89,10 +90,14 @@ consoleread(int user_dst, uint64 dst, int n)
     // wait until interrupt handler has put some
     // input into cons.buffer.
     while(cons.r == cons.w){
+      // 待っている間にプロセスが kill されたらロックを開放して戻る
       if(killed(myproc())){
         release(&cons.lock);
         return -1;
       }
+      // コンソールからのデータが(1行分)貯まるまで sleep
+      // ロックしているので他のプロセスが同時にコンソールのデバイスファイルを開いて
+      // read したとしても邪魔されない
       sleep(&cons.r, &cons.lock);
     }
 
@@ -138,6 +143,7 @@ consoleintr(int c)
   acquire(&cons.lock);
 
   switch(c){
+  // ctrl キーとの組み合わせやバックスペースの入力は特別に処理する
   case C('P'):  // Print process list.
     procdump();
     break;
@@ -159,12 +165,16 @@ consoleintr(int c)
     if(c != 0 && cons.e-cons.r < INPUT_BUF_SIZE){
       c = (c == '\r') ? '\n' : c;
 
+      // ユーザがキー入力したら、まずその文字をそのまま表示(echo back)する
       // echo back to the user.
       consputc(c);
 
+      // 受け取った文字はいきなり処理せず、いったんバッファにためる
       // store for consumption by consoleread().
       cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
 
+      // 改行文字や EOF がきたりバッファがいっぱいになったら、
+      // UART の入力待ちのプロセスに対し読み取りできるようになったと通知する
       if(c == '\n' || c == C('D') || cons.e-cons.r == INPUT_BUF_SIZE){
         // wake up consoleread() if a whole line (or end-of-file)
         // has arrived.
@@ -187,6 +197,7 @@ consoleinit(void)
   // 実際にシリアルでデータを入出力する uart 関係のレジスタを操作し初期化する
   uartinit();
 
+  // コンソールのデバイスファイルへの read/write を consoleread/consolewrite に対応付ける
   // connect read and write system calls
   // to consoleread and consolewrite.
   devsw[CONSOLE].read = consoleread;

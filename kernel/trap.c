@@ -190,10 +190,44 @@ devintr()
 {
   uint64 scause = r_scause();
 
+  // 最上位ビットが1なら、このトラップは割込みによって発生したということ
+  // scause & 0xff が 9 のときは、"supervisor external interrupt" となる
+
+  // Table 3.6: Machine cause register (mcause) values after trap.
+  // たぶん scause も同じ(s=supervisor, m=machine)
+  // Interrupt Exception Code Description
+  // 1         0         User software interrupt
+  // 1         1         Supervisor software interrupt
+  // 1         2         Hypervisor software interrupt
+  // 1         3         Machine software interrupt
+  // 1         4         User timer interrupt
+  // 1         5         Supervisor timer interrupt
+  // 1         6         Hypervisor timer interrupt
+  // 1         7         Machine timer interrupt
+  // 1         8         User external interrupt
+  // 1         9         Supervisor external interrupt
+  // 1         10        Hypervisor external interrupt
+  // 1         11        Machine external interrupt
+  // 1         ≥12       Reserved
+  // 0         0         Instruction address misaligned
+  // 0         1         Instruction access fault
+  // 0         2         Illegal instruction
+  // 0         3         Breakpoint
+  // 0         4         Load address misaligned
+  // 0         5         Load access fault
+  // 0         6         Store/AMO address misaligned
+  // 0         7         Store/AMO access fault
+  // 0         8         Environment call from U-mode
+  // 0         9         Environment call from S-mode
+  // 0         10        Environment call from H-mode
+  // 0         11        Environment call from M-mode
+  // 0         ≥12       Reserved
+
   if((scause & 0x8000000000000000L) &&
      (scause & 0xff) == 9){
     // this is a supervisor external interrupt, via PLIC.
 
+    // この処理を実行中の CPU コアの PLIC に割込み要因を問い合わせ
     // irq indicates which device interrupted.
     int irq = plic_claim();
 

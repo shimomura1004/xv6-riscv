@@ -31,7 +31,9 @@ main(void)
       exit(1);
     }
     if(pid == 0){
+      // fork された子プロセスは sh を実行する
       exec("sh", argv);
+      // exec から戻ることはないので、ここに来たということは exec に失敗している
       printf("init: exec sh failed\n");
       exit(1);
     }
@@ -41,6 +43,7 @@ main(void)
       // or if a parentless process exits.
       wpid = wait((int *) 0);
       if(wpid == pid){
+        // 最初に起動した sh が終了してしまったら再起動する
         // the shell exited; restart it.
         break;
       } else if(wpid < 0){

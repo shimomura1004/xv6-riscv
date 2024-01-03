@@ -598,8 +598,10 @@ wakeup(void *chan)
   struct proc *p;
 
   for(p = proc; p < &proc[NPROC]; p++) {
+    // すべてのプロセスを見て、wakeup を呼んだプロセス以外のものに対して処理する
     if(p != myproc()){
       acquire(&p->lock);
+      // 指定されたチャネルの入力待ちで sleep しているプロセスを runnable にする
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
       }
@@ -659,8 +661,10 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_dst){
+    // ユーザ空間へのコピーの場合は copyout を使う
     return copyout(p->pagetable, dst, src, len);
   } else {
+    // カーネル空間内のコピーの場合は memmove するだけ
     memmove((char *)dst, src, len);
     return 0;
   }

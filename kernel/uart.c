@@ -181,6 +181,8 @@ uartintr(void)
     int c = uartgetc();
     if(c == -1)
       break;
+    // UART からの入力を受けて、xv6 独自の処理を行うハンドラを呼び出す
+    // Ctrl-p でプロセスリストを表示するとか
     consoleintr(c);
   }
 
