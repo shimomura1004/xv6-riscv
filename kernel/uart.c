@@ -140,6 +140,8 @@ uartstart()
       return;
     }
     
+    // UART デバイスが送信を受付けできない状態なら終了
+    // 空いたタイミングでまた割込みがくる
     if((ReadReg(LSR) & LSR_TX_IDLE) == 0){
       // the UART transmit holding register is full,
       // so we cannot give it another byte.
@@ -147,9 +149,11 @@ uartstart()
       return;
     }
     
+    // データをバッファにいれて
     int c = uart_tx_buf[uart_tx_r % UART_TX_BUF_SIZE];
     uart_tx_r += 1;
     
+    // 送信待ちのプロセスを起こす
     // maybe uartputc() is waiting for space in the buffer.
     wakeup(&uart_tx_r);
     
@@ -188,6 +192,7 @@ uartintr(void)
 
   // send buffered characters.
   acquire(&uart_tx_lock);
+  // UART による送信を試みる
   uartstart();
   release(&uart_tx_lock);
 }

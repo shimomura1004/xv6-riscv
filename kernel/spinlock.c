@@ -21,6 +21,9 @@ initlock(struct spinlock *lk, char *name)
 void
 acquire(struct spinlock *lk)
 {
+  // xv6 は保守的な設計となっており、ロックを取得するときは割込みを無効にする
+  // xv6 は多重割込みが有効なので、 acquire がネストすることを考慮し
+  // push_off/pop_off で回数をカウントしている
   push_off(); // disable interrupts to avoid deadlock.
   if(holding(lk))
     panic("acquire");
