@@ -35,6 +35,10 @@ acquire(struct spinlock *lk)
   while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
     ;
 
+  // ロックへの読み書きと、ロックで守られたデータへの読み書きは、
+  // コンパイラや CPU には依存がないように見えるので実行順が入れ替えられてしまう可能性がある
+  // (並べ替えのルールはメモリモデルと呼ばれる)
+  // __sync_synchronize はメモリバリアであり、ここをこえて命令の並べ替えが行われないようにできる
   // Tell the C compiler and the processor to not move loads or stores
   // past this point, to ensure that the critical section's memory
   // references happen strictly after the lock is acquired.
