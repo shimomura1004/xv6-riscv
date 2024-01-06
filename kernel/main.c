@@ -60,5 +60,6 @@ main()
     plicinithart();   // ask PLIC for device interrupts
   }
 
+  // 各 CPU コアで実行され、ここには戻らない
   scheduler();        
 }

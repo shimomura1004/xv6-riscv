@@ -7,6 +7,7 @@
 
 .globl swtch
 swtch:
+        # 今のプロセスのレジスタを控えて
         sd ra, 0(a0)
         sd sp, 8(a0)
         sd s0, 16(a0)
@@ -22,6 +23,7 @@ swtch:
         sd s10, 96(a0)
         sd s11, 104(a0)
 
+        # 次のプロセスのレジスタを復帰して
         ld ra, 0(a1)
         ld sp, 8(a1)
         ld s0, 16(a1)
@@ -37,6 +39,7 @@ swtch:
         ld s10, 96(a1)
         ld s11, 104(a1)
         
+        # ret すると、次のプロセスが前回 swtch を呼んだところから再開する
         ret
 
 	

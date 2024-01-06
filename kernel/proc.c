@@ -70,6 +70,9 @@ procinit(void)
   }
 }
 
+// ここで得た cpuid は、タイマ割込みによるコンテキストスイッチがあって
+// 復帰後に実行される CPU が変わると食い違ってしまう
+// なので cpuid を読んで使い終わるまでは割込みを無効にしないといけない
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
@@ -90,6 +93,9 @@ mycpu(void)
   return c;
 }
 
+// myproc は、今カーネル処理を実行中の CPU コアで動いているプロセス構造体を返す
+// そのときに割込みを無効にした上で mycpu を呼んでいる
+// プロセス構造体は実行中の CPU が変わっても変化しないので割込みを有効化しても問題ない
 // Return the current struct proc *, or zero if none.
 struct proc*
 myproc(void)
@@ -475,6 +481,7 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
+    // 全プロセスのうち runnable なものを順番に実行していく
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
@@ -483,6 +490,7 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // swtch を呼んでユーザプロセスに切り替え(しばらく戻ってこない)
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -507,7 +515,6 @@ sched(void)
   int intena;
   struct proc *p = myproc();
 
-  // todo: このあたりの条件が必要なのはなぜか
   if(!holding(&p->lock))
     panic("sched p->lock");
   if(mycpu()->noff != 1)
@@ -521,6 +528,9 @@ sched(void)
   intena = mycpu()->intena;
   // 控えていたレジスタを復元してプロセスを切り替え
   swtch(&p->context, &mycpu()->context);
+
+  // ここにはしばらく戻ってこない
+
   mycpu()->intena = intena;
   // スタックポインタも復元されるので、return すると、
   // 切り替え先のプロセスが sched を呼んだところに戻る
@@ -531,10 +541,16 @@ void
 yield(void)
 {
   struct proc *p = myproc();
+  // 実行するプロセスを切り替えるためにロックを取る
+  // プロセス構造体のデータを切り替えていくので、途中で他の CPU が同じプロセス構造体を
+  // 操作しないようにしないといけない
   acquire(&p->lock);
   // 今まで実行中だったプロセスステータスを実行可能にして、sched で切り替え
   p->state = RUNNABLE;
   sched();
+  // この release は、別プロセスで acquire したロックを手放すもの
+  // このプロセス自身が切り替え前に取ったロックを開放するわけではない
+  // (プロセスの切り替えのタイミングを邪魔されないようにするのがロックの目的)
   release(&p->lock);
 }
 
@@ -566,6 +582,16 @@ sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
   
+  // セマフォの実装などを念頭に sleep と wakeup の実装を想定する
+  //   V 操作はカウントアップし、P 操作でウェイトしているプロセスを起こす
+  //   P 操作はカウントダウンするが、カウンタが 0 だったらスリープする
+  // V 操作で、カウンタが 0 なのを見て sleep を呼ぼうとした瞬間に別 CPU で P 操作が行われた場合
+  // 先に wakeup が呼ばれ、そのあと sleep が呼ばれてデッドロックしてしまう
+  // (lost wake-up problem)
+  // これは「カウンタが 0 のときだけ sleep する」という不変量が破れたことが原因
+  // (排他が足りずカウンタが1以上のときに sleep してしまう可能性がある)
+  // これを避けるために sleep の引数にロック(lk)を追加している
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be

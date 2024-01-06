@@ -82,6 +82,7 @@ uservec:
         # initialize kernel stack pointer, from p->trapframe->kernel_sp
         ld sp, 8(a0)
 
+        # カーネルの処理中は tp に hartid が入っていないといけない
         # make tp hold the current hartid, from p->trapframe->kernel_hartid
         ld tp, 32(a0)
 
