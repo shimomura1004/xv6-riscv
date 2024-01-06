@@ -396,19 +396,27 @@ exit(int status)
 
   acquire(&wait_lock);
 
+  // 自分が終了するとき、自分が生成した子プロセスを init に託す
+  // 子プロセスが終了を通知する先がいなくなってしまう(zombie のままになってしまう)ことを防ぐため
   // Give any children to init.
   reparent(p);
 
+  // 先に親を起こしているが、既に wait_lock を取っており、
+  // 途中で wait が割り込んでくることはないので大丈夫
   // Parent might be sleeping in wait().
   wakeup(p->parent);
   
+  // これからプロセス構造体の状態を変更していく(一時的に不整合になる)のでロックを取る
   acquire(&p->lock);
 
   p->xstate = status;
+  // exit するときはプロセスの状態は zombie になる
+  // その後、親プロセスの wait　が zombie になっていることを認識して unused に変更する
   p->state = ZOMBIE;
 
   release(&wait_lock);
 
+  // 自分の終了処理が終わったら他にやることはないので早々に CPU を手放す
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
@@ -429,35 +437,46 @@ wait(uint64 addr)
     // Scan through table looking for exited children.
     havekids = 0;
     for(pp = proc; pp < &proc[NPROC]; pp++){
+      // 自分の子プロセスを探す
       if(pp->parent == p){
         // make sure the child isn't still in exit() or swtch().
         acquire(&pp->lock);
 
         havekids = 1;
+        // 子プロセスが先に終了していた場合は zombie 状態になっている
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
+          // 子プロセスの終了コードを、引数として受け取った(ユーザ空間の)アドレスにコピー
           if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
                                   sizeof(pp->xstate)) < 0) {
             release(&pp->lock);
             release(&wait_lock);
             return -1;
           }
+          // trapframe の開放など、プロセス構造体の開放処理を行う
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
+          // 終了済みの子プロセスがいたら、いったん return してしまう
+          // そうしないと子プロセスの終了コードなどを返せなくなってしまうため
+          // wait を呼ぶアプリ側では何度も wait する必要がある
           return pid;
         }
         release(&pp->lock);
       }
     }
 
+    // 子プロセスが見つからずに上記ループを抜けていたら終わり
     // No point waiting if we don't have any children.
     if(!havekids || killed(p)){
       release(&wait_lock);
       return -1;
     }
     
+    // ここにきたということは、子プロセスは見つかったが終了していなかったということ
+    // よって子プロセスが終わるのを待つ
+    // 待つのに使うのは自分のプロセス構造体のアドレス
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -651,8 +670,17 @@ kill(int pid)
 
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
+    // kill の対象となるプロセスを探す
     if(p->pid == pid){
+      // 具体的な終了処理をするわけではなく、プロセス構造体にフラグを立てるだけ
+      // このプロセスは他の CPU でなにか重要な処理をしている可能性もあるので
+      // 適当に kill するわけにはいかない
+      // ここでフラグを立てておいて、その後 usertrap が呼ばれるタイミングで
+      // 自発的に終了(exit を呼ぶ)することになっている
+      // (そのため、スケジューラから時間をもらうために sleep から起こす必要がある)
+      // usertrap はシステムコールを呼んだりタイマ割込みが入ると呼ばれる
       p->killed = 1;
+      // 対象プロセスが wait していたらまず起こす
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
