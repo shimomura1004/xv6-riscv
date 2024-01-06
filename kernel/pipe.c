@@ -86,16 +86,19 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
       return -1;
     }
     if(pi->nwrite == pi->nread + PIPESIZE){ //DOC: pipewrite-full
+      // バッファがいっぱいになってしまったら、読み取り待ちのプロセスを起こして sleep する
       wakeup(&pi->nread);
       sleep(&pi->nwrite, &pi->lock);
     } else {
       char ch;
+      // 1文字ずつ読み取ってキューに入れていく
       if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
         break;
       pi->data[pi->nwrite++ % PIPESIZE] = ch;
       i++;
     }
   }
+  // 書き終わったので、読み取り待ちのプロセスを起こす
   wakeup(&pi->nread);
   release(&pi->lock);
 
@@ -109,21 +112,31 @@ piperead(struct pipe *pi, uint64 addr, int n)
   struct proc *pr = myproc();
   char ch;
 
+  // read/write で、同時にキューを操作できるのは1つだけ
   acquire(&pi->lock);
+  // 書いたバイト数と読んだバイト数が同じならからっぽなので、sleep して待つ
   while(pi->nread == pi->nwrite && pi->writeopen){  //DOC: pipe-empty
+    // いつのまにかプロセスが kill されてしまっていたら抜ける
     if(killed(pr)){
       release(&pi->lock);
       return -1;
     }
+    // pi->lock を握ったまま sleep するとデッドロックする
+    // sleep は、渡された pi->lock を開放してから休止状態にするので問題なし
     sleep(&pi->nread, &pi->lock); //DOC: piperead-sleep
   }
+  // while を抜けてきたということはデータが入ってきたということ
   for(i = 0; i < n; i++){  //DOC: piperead-copy
+    // データがなくなってしまったら抜ける
     if(pi->nread == pi->nwrite)
       break;
     ch = pi->data[pi->nread++ % PIPESIZE];
+    // 1バイトずつコピー
     if(copyout(pr->pagetable, addr + i, &ch, 1) == -1)
       break;
   }
+  // 読み終わったのでパイプがあいた状態
+  // よって write 側でバッファがあくのを待っているプロセスを起こす
   wakeup(&pi->nwrite);  //DOC: piperead-wakeup
   release(&pi->lock);
   return i;

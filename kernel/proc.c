@@ -581,6 +581,10 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+
+  // sleep は while 文の中で呼び出すべき
+  // 複数のプロセスが同じリソースを待つ場合、先に起きた他のプロセスが
+  // リソースをすべて使う可能性があり、その場合は再び待つ必要があるため
   
   // セマフォの実装などを念頭に sleep と wakeup の実装を想定する
   //   V 操作はカウントアップし、P 操作でウェイトしているプロセスを起こす
@@ -628,6 +632,7 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       // 指定されたチャネルの入力待ちで sleep しているプロセスを runnable にする
+      // runnable にするだけで、切り替えはしない(sched は呼ばない)
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
       }
