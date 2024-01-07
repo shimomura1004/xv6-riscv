@@ -27,12 +27,14 @@ static struct disk {
   // these descriptors.
   struct virtq_desc *desc;
 
+  // いわゆる available ring
   // a ring in which the driver writes descriptor numbers
   // that the driver would like the device to process.  it only
   // includes the head descriptor of each chain. the ring has
   // NUM elements.
   struct virtq_avail *avail;
 
+  // いわゆる used ring
   // a ring in which the device writes descriptor numbers that
   // the device has finished processing (just the head of each chain).
   // there are NUM used ring entries.
@@ -157,6 +159,7 @@ static int
 alloc_desc()
 {
   for(int i = 0; i < NUM; i++){
+    // 使っていないディスクリプタを探す
     if(disk.free[i]){
       disk.free[i] = 0;
       return i;
@@ -203,6 +206,7 @@ alloc3_desc(int *idx)
 {
   for(int i = 0; i < 3; i++){
     idx[i] = alloc_desc();
+    // ディスクリプタの確保に失敗したら、これまでに確保したものを開放してからエラーとして戻る
     if(idx[i] < 0){
       for(int j = 0; j < i; j++)
         free_desc(idx[j]);
@@ -212,6 +216,7 @@ alloc3_desc(int *idx)
   return 0;
 }
 
+// write が 0 以外なら書き込み、そうでなければ読み込み
 void
 virtio_disk_rw(struct buf *b, int write)
 {
@@ -226,6 +231,7 @@ virtio_disk_rw(struct buf *b, int write)
   // allocate the three descriptors.
   int idx[3];
   while(1){
+    // 3つのディスクリプタが確保できるまでループする
     if(alloc3_desc(idx) == 0) {
       break;
     }
@@ -235,6 +241,7 @@ virtio_disk_rw(struct buf *b, int write)
   // format the three descriptors.
   // qemu's virtio-blk.c reads them.
 
+  // virtio のお作法に従う
   struct virtio_blk_req *buf0 = &disk.ops[idx[0]];
 
   if(write)
