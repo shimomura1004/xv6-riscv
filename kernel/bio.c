@@ -159,6 +159,7 @@ brelse(struct buf *b)
   release(&bcache.lock);
 }
 
+// 参照カウントを増やし開放されないようにする
 void
 bpin(struct buf *b) {
   acquire(&bcache.lock);

@@ -9,6 +9,9 @@
 
 // Simple logging that allows concurrent FS system calls.
 //
+// ひとつのログトランザクションには複数の FS 関係のシステムコールが含まれている
+// アクティブなシステムコールがなくなったタイミングでコミットされる
+//
 // A log transaction contains the updates of multiple FS system
 // calls. The logging system only commits when there are
 // no FS system calls active. Thus there is never
@@ -54,13 +57,16 @@ static void commit();
 void
 initlog(int dev, struct superblock *sb)
 {
+  // sb には、readsb でブロック番号1から読んだスーパーブロックの中身(メタデータ)が入っている
   if (sizeof(struct logheader) >= BSIZE)
     panic("initlog: too big logheader");
 
   initlock(&log.lock, "log");
+  // スーパーブロックに書かれたメタデータで変数を初期化
   log.start = sb->logstart;
   log.size = sb->nlog;
   log.dev = dev;
+  // 電源断などでコミット済みのトランザクションが残っていた場合に備え、最初に復帰処理を実施
   recover_from_log();
 }
 
@@ -113,6 +119,7 @@ write_head(void)
   brelse(buf);
 }
 
+// 起動時に initlog から呼ばれ、コミットされたトランザクションが残っていたら処理する
 static void
 recover_from_log(void)
 {
@@ -122,6 +129,8 @@ recover_from_log(void)
   write_head(); // clear the log
 }
 
+// FS システムコールを呼ぶ前に呼ぶ
+// outstanding 数がインクリメントされ、複数のプロセスからのブロックアクセスを統合できる
 // called at the start of each FS system call.
 void
 begin_op(void)
@@ -129,11 +138,17 @@ begin_op(void)
   acquire(&log.lock);
   while(1){
     if(log.committing){
+      // ログをコミット中(書き込み中)だったら待つ
       sleep(&log, &log.lock);
     } else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE){
+      // 現在書き込まれているログ数に加え、処理中(outstanding)の全プロセスが
+      // 最大のブロック数まで書き込んだ場合の合計が最大値を超える場合
+      // ログが多くなりすぎるかもしれないのでここで止める
       // this op might exhaust log space; wait for commit.
       sleep(&log, &log.lock);
     } else {
+      // 処理中の(FS システムコールを呼んでいる)プロセス数をひとつ増やし、ロックを開放してから抜ける
+      // あとで outstanding なプロセスが 0 になったらまとめて commit することになる
       log.outstanding += 1;
       release(&log.lock);
       break;
@@ -141,6 +156,8 @@ begin_op(void)
   }
 }
 
+// begin_op の逆で、outstanding 数を減らす
+// outstanding なプロセス数が 0 になったらコミットする
 // called at the end of each FS system call.
 // commits if this was the last outstanding operation.
 void
@@ -151,11 +168,14 @@ end_op(void)
   acquire(&log.lock);
   log.outstanding -= 1;
   if(log.committing)
+    // コミットは自分しかできないはず、他の誰かがコミットを呼んでいるのであれば異常
     panic("log.committing");
   if(log.outstanding == 0){
+    // ブロックキャッシュにアクセスしているプロセスがいなくなったのでコミットする(フラグを立てる)
     do_commit = 1;
     log.committing = 1;
   } else {
+    // 処理中のプロセス数が減ったので begin_op で待っているプロセスがいたら起こす
     // begin_op() may be waiting for log space,
     // and decrementing log.outstanding has decreased
     // the amount of reserved space.
@@ -169,6 +189,7 @@ end_op(void)
     commit();
     acquire(&log.lock);
     log.committing = 0;
+    // begin_op にコミットを待っているプロセスがいたら起こす
     wakeup(&log);
     release(&log.lock);
   }
@@ -181,9 +202,14 @@ write_log(void)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
+    // ログブロックのブロックキャッシュを先頭から順番に取得
     struct buf *to = bread(log.dev, log.start+tail+1); // log block
+    // プロセスが書き込んで dirty になったブロックキャッシュを取得
     struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
+    // プロセスが書き込んだブロックキャッシュから、ログブロックのブロックキャッシュに
+    // メモリの内容をコピーする(まだメモリ上の操作だけで、実際にはディスクには書かれていない)
     memmove(to->data, from->data, BSIZE);
+    // virtio ドライバにアクセスし、本当にディスクに書き込む
     bwrite(to);  // write the log
     brelse(from);
     brelse(to);
@@ -194,6 +220,7 @@ static void
 commit()
 {
   if (log.lh.n > 0) {
+    // ログが1つでもあったら実行
     write_log();     // Write modified blocks from cache to log
     write_head();    // Write header to disk -- the real commit
     install_trans(0); // Now install writes to home locations
@@ -220,6 +247,7 @@ log_write(struct buf *b)
   if (log.lh.n >= LOGSIZE || log.lh.n >= log.size - 1)
     panic("too big a transaction");
   if (log.outstanding < 1)
+    // トランザクションを開始していないのに log に書き込もうとしたら異常
     panic("log_write outside of trans");
 
   for (i = 0; i < log.lh.n; i++) {
@@ -228,6 +256,7 @@ log_write(struct buf *b)
   }
   log.lh.block[i] = b->blockno;
   if (i == log.lh.n) {  // Add new block to log?
+    // 新しいブロックの場合はピン止めする
     bpin(b);
     log.lh.n++;
   }
