@@ -70,6 +70,12 @@ initlog(int dev, struct superblock *sb)
   recover_from_log();
 }
 
+// いったんログブロックに書き込んだデータを使って実際のデータ領域を更新していく
+// 途中で電源が切れた場合は最初からやり直すことになるが実害はない
+// グローバル変数の log は電源が切れるともちろん失われるが
+// initlog->recover_from_log->read_head で、先頭ログブロックに格納された
+// ログヘッダから復元されるので問題ない
+// 引数の recovering は、通常の commit のとき 0 で、リカバリ中だと 1
 // Copy committed blocks from log to their home location
 static void
 install_trans(int recovering)
@@ -77,11 +83,15 @@ install_trans(int recovering)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
+    // 読み込み元はログブロックの1番目(0オリジン)から順番に選ぶ
     struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
+    // 書き込み先は、ログヘッダに書かれている本当のブロック番号のブロック
     struct buf *dbuf = bread(log.dev, log.lh.block[tail]); // read dst
     memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
     bwrite(dbuf);  // write dst to disk
     if(recovering == 0)
+      // 普通のコミット中の場合は、ブロックキャッシュが固定(bpin)されているので解除
+      // リカバリ中の場合は起動直後にここに到達しており、ブロックキャッシュは固定していないので不要
       bunpin(dbuf);
     brelse(lbuf);
     brelse(dbuf);
@@ -102,19 +112,28 @@ read_head(void)
   brelse(buf);
 }
 
+// write_head が書き込む先は、log.start で指されたブロックただひとつ
+// log.start はスーパーブロック(1番目のブロック)に書かれた sb.logstart が代入されている
+// mkfs.c を見ると 2 になっている
+// 実際、0番ブロックがブートブロック、1番ブロックがスーパーブロック
+// 2番以降がログブロックになっている
 // Write in-memory log header to disk.
 // This is the true point at which the
 // current transaction commits.
 static void
 write_head(void)
 {
+  // 先頭のログブロックのブロックキャッシュを取得
   struct buf *buf = bread(log.dev, log.start);
+  // このブロックにはログヘッダを入れる
   struct logheader *hb = (struct logheader *) (buf->data);
   int i;
+  // 必要な情報をキャッシュに書き込んでから
   hb->n = log.lh.n;
   for (i = 0; i < log.lh.n; i++) {
     hb->block[i] = log.lh.block[i];
   }
+  // ストレージに書き出してキャッシュをリリース
   bwrite(buf);
   brelse(buf);
 }
@@ -125,6 +144,7 @@ recover_from_log(void)
 {
   read_head();
   install_trans(1); // if committed, copy from log to disk
+  // このあたりは commit のときと同じ動き
   log.lh.n = 0;
   write_head(); // clear the log
 }
@@ -195,6 +215,11 @@ end_op(void)
   }
 }
 
+// ブロックキャッシュからいきなり本物のブロックに書き込まず
+// 一度ログブロックと呼ばれる部分に書き出すところが重要
+// これでトランザクションをアトミックにできる
+// write_log が書き込む先は、log.start + 1 から順番に使われる
+// ログブロックの最初のブロックはログヘッダが使っているので、1つ後ろから使う
 // Copy modified blocks from cache to log.
 static void
 write_log(void)
@@ -211,6 +236,7 @@ write_log(void)
     memmove(to->data, from->data, BSIZE);
     // virtio ドライバにアクセスし、本当にディスクに書き込む
     bwrite(to);  // write the log
+    // 使ったキャッシュを開放する
     brelse(from);
     brelse(to);
   }
@@ -221,10 +247,18 @@ commit()
 {
   if (log.lh.n > 0) {
     // ログが1つでもあったら実行
+
+    // ログブロックの1番目(0オリジン)以降に、ブロックキャッシュを書き込む
     write_log();     // Write modified blocks from cache to log
+    // ログブロックの0番目に、ログヘッダを書き込む
     write_head();    // Write header to disk -- the real commit
+    // この時点ではログヘッダなどはディスクに書き込まれているが、実際のファイルは未変更
+    // いったんログブロックに書き込んだデータを実際のファイルがあるブロックに書き込んでいく
     install_trans(0); // Now install writes to home locations
+    // ログキャッシュは全部書き込んだので、クリア
     log.lh.n = 0;
+    // ログキャッシュが空の状態で write_head することで先頭ログブロックに書かれたログを消す
+    // これをやらないと、次に電源オンされたときに同じ処理を繰り返してしまう
     write_head();    // Erase the transaction from the log
   }
 }
