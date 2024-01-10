@@ -46,6 +46,7 @@ fsinit(int dev) {
   initlog(dev, &sb);
 }
 
+// ブロックを 0 クリアする
 // Zero a block.
 static void
 bzero(int dev, int bno)
@@ -69,13 +70,18 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
+  // BPB: Bitmap bits Per Block
+  // ブロックひとつあたりのビット数(ブロックサイズ1024、1バイトは8ビットなので 8096 になる)
+  // ビットマップブロック1つで 8096 個のブロックの使用状況を保持できるということ
   for(b = 0; b < sb.size; b += BPB){
-    // 使っていないブロックを順番に見ていく
+    // ビットマップブロックごとに処理をしていく
+    // b はブロック番号(8096 ずつ増えていく)
     // 候補のブロックの使用状況を持つビットマップブロックを取得
     bp = bread(dev, BBLOCK(b, sb));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
-      // bi はビット単位のインデックス
-      // m はビット位置のマスク
+      // bi もブロック番号のカウンタ(0~8095)
+      // なので今見ているブロック番号は (b + bi) になる
+      // m は bi に対応するビット位置のマスク
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
         // 0 なら使用可能なので、ビットセットして使用中にする
@@ -84,8 +90,9 @@ balloc(uint dev)
         log_write(bp);
         // bpin 効果で、brelse しても bp の refcnt は 1 となりキャッシュは解放されない
         brelse(bp);
-        // todo: これはなにをしている…？
+        // 新たに確保したブロックの中身を 0 でクリアする
         bzero(dev, b + bi);
+        // 見つけたブロック番号を返す
         return b + bi;
       }
     }
@@ -102,12 +109,16 @@ bfree(int dev, uint b)
   struct buf *bp;
   int bi, m;
 
+  // 解放したいブロックの情報を保持するビットマップブロックをキャッシュに乗せる
   bp = bread(dev, BBLOCK(b, sb));
+  // alloc のときと同じ方法でビット位置を決定
   bi = b % BPB;
   m = 1 << (bi % 8);
   if((bp->data[bi/8] & m) == 0)
     panic("freeing free block");
+  // フラグクリア
   bp->data[bi/8] &= ~m;
+  // ログ(トランザクション)に追加
   log_write(bp);
   brelse(bp);
 }
