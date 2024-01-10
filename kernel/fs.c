@@ -70,13 +70,21 @@ balloc(uint dev)
 
   bp = 0;
   for(b = 0; b < sb.size; b += BPB){
+    // 使っていないブロックを順番に見ていく
+    // 候補のブロックの使用状況を持つビットマップブロックを取得
     bp = bread(dev, BBLOCK(b, sb));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+      // bi はビット単位のインデックス
+      // m はビット位置のマスク
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
+        // 0 なら使用可能なので、ビットセットして使用中にする
         bp->data[bi/8] |= m;  // Mark block in use.
+        // 変更したビットマップブロックのキャッシュをピン止め(bp は bpin される)
         log_write(bp);
+        // bpin 効果で、brelse しても bp の refcnt は 1 となりキャッシュは解放されない
         brelse(bp);
+        // todo: これはなにをしている…？
         bzero(dev, b + bi);
         return b + bi;
       }

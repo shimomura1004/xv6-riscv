@@ -91,7 +91,11 @@ install_trans(int recovering)
     bwrite(dbuf);  // write dst to disk
     if(recovering == 0)
       // 普通のコミット中の場合は、ブロックキャッシュが固定(bpin)されているので解除
+      //   bpin しているのは log_write 内のみで、log_write と install_trans が対応している
+      //   log_write すると install_trans するまでキャッシュが解除されない
       // リカバリ中の場合は起動直後にここに到達しており、ブロックキャッシュは固定していないので不要
+      //   つまり、電源断前に log_write してトランザクションが記憶されていた
+      //   復帰後にはメモリは消え、log_write も呼ばれないので bpin されない
       bunpin(dbuf);
     brelse(lbuf);
     brelse(dbuf);
@@ -113,8 +117,8 @@ read_head(void)
 }
 
 // write_head が書き込む先は、log.start で指されたブロックただひとつ
-// log.start はスーパーブロック(1番目のブロック)に書かれた sb.logstart が代入されている
-// mkfs.c を見ると 2 になっている
+// log.start はスーパーブロック(1番目のブロック)に書かれた sb.logstart が代入されており
+// スーバーブロックに書かれた内容は、mkfs.c を見ると 2 になっている
 // 実際、0番ブロックがブートブロック、1番ブロックがスーパーブロック
 // 2番以降がログブロックになっている
 // Write in-memory log header to disk.
@@ -215,9 +219,11 @@ end_op(void)
   }
 }
 
-// ブロックキャッシュからいきなり本物のブロックに書き込まず
-// 一度ログブロックと呼ばれる部分に書き出すところが重要
-// これでトランザクションをアトミックにできる
+// ログブロックの1番目(0オリジン)以降に、変更されたブロックのキャッシュを書き込む
+// キャッシュをいきなりストレージ内の本物のブロックには書き込まず
+// 一度ログブロックと呼ばれる部分に書き出すところが大事
+// トランザクションをログブロック(一時領域)に全部書き込んでからマークすることで
+// トランザクションをアトミックにできる
 // write_log が書き込む先は、log.start + 1 から順番に使われる
 // ログブロックの最初のブロックはログヘッダが使っているので、1つ後ろから使う
 // Copy modified blocks from cache to log.
@@ -227,16 +233,18 @@ write_log(void)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    // ログブロックのブロックキャッシュを先頭から順番に取得
+    // ログブロック(一時領域)のブロックキャッシュを先頭から順番に取得
     struct buf *to = bread(log.dev, log.start+tail+1); // log block
-    // プロセスが書き込んで dirty になったブロックキャッシュを取得
+    // プロセスが変更したブロックのキャッシュを順番に取得
     struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
-    // プロセスが書き込んだブロックキャッシュから、ログブロックのブロックキャッシュに
-    // メモリの内容をコピーする(まだメモリ上の操作だけで、実際にはディスクには書かれていない)
+    // トランザクションをログブロックのブロックキャッシュにコピーする
+    // この時点ではまだメモリ上の操作だけで、ディスクには書かれていない
     memmove(to->data, from->data, BSIZE);
     // virtio ドライバにアクセスし、本当にディスクに書き込む
     bwrite(to);  // write the log
     // 使ったキャッシュを開放する
+    // この2つの brelese でキャッシュが解放されるのは実は to だけ
+    // from のほうは log_write で bpin しているので refcnt が 0 にならず解放されない
     brelse(from);
     brelse(to);
   }
@@ -248,7 +256,7 @@ commit()
   if (log.lh.n > 0) {
     // ログが1つでもあったら実行
 
-    // ログブロックの1番目(0オリジン)以降に、ブロックキャッシュを書き込む
+    // ログブロックの1番目(0オリジン)以降に、変更されたブロックのキャッシュを書き込む
     write_log();     // Write modified blocks from cache to log
     // ログブロックの0番目に、ログヘッダを書き込む
     write_head();    // Write header to disk -- the real commit
@@ -263,10 +271,16 @@ commit()
   }
 }
 
+// 指定されたブロックをログに(トランザクションに)追加する
 // Caller has modified b->data and is done with the buffer.
 // Record the block number and pin in the cache by increasing refcnt.
 // commit()/write_log() will do the disk write.
 //
+// bread が返すブロックキャッシュの refcnt は 1
+// log_write で bpin するので refcnt は 2
+// brelse では 1 減らすだけなので、refcnt は 1 のまま
+// つまりこの処理後には refcnt が 1 になりキャッシュが解放されなくなっている
+// これは意図通りの動作で、commit 時の install_trans(0) で bunpin されるので問題ない
 // log_write() replaces bwrite(); a typical use is:
 //   bp = bread(...)
 //   modify bp->data[]
@@ -285,12 +299,20 @@ log_write(struct buf *b)
     panic("log_write outside of trans");
 
   for (i = 0; i < log.lh.n; i++) {
+    // 既にブロックへの変更がトランザクションに入っていたら抜ける
+    // - キャッシュは bio.c で定義される bcache が持つ buf のリンクリスト
+    //   一時的にデータをメモリ上に持つために使う
+    // - ログは log.c で定義される log が持つ lh メンバ(logheader 構造体)
+    //   logheader には、ログの数と変更されたブロック番号を入れる配列しかない
+    //   なのでブロックの変更内容はキャッシュが解放されてしまうと失われる
     if (log.lh.block[i] == b->blockno)   // log absorption
       break;
   }
   log.lh.block[i] = b->blockno;
   if (i == log.lh.n) {  // Add new block to log?
-    // 新しいブロックの場合はピン止めする
+    // 新しいブロックをトランザクションに加える場合は、そのブロックのキャッシュをピン止めする
+    // log_write の引数として受け取った b は bread されているはずで、
+    // bpin 後は refcnt が 2 以上になる
     bpin(b);
     log.lh.n++;
   }
