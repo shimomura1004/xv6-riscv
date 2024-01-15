@@ -192,6 +192,7 @@ bfree(int dev, uint b)
 // dev, and inum.  One must hold ip->lock in order to
 // read or write that inode's ip->valid, ip->size, ip->type, &c.
 
+// inode のキャッシュ？
 struct {
   struct spinlock lock;
   struct inode inode[NINODE];
@@ -222,11 +223,17 @@ ialloc(uint dev, short type)
   struct dinode *dip;
 
   for(inum = 1; inum < sb.ninodes; inum++){
+    // inode ブロックを取得、1番から順番に見ていく
+    // 今見ている inode 番号が含まれる inode ブロックを取得
     bp = bread(dev, IBLOCK(inum, sb));
+    // IPB はブロック1つに含まれる inode の数
+    // 今見ている inode 番号の場所を計算
     dip = (struct dinode*)bp->data + inum%IPB;
     if(dip->type == 0){  // a free inode
+      // 全体を 0 クリアしたあと使用中に変更
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
+      // inode のエントリを変更したので、今編集した inode ブロックをトランザクションに入れる
       log_write(bp);   // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
@@ -247,14 +254,18 @@ iupdate(struct inode *ip)
   struct buf *bp;
   struct dinode *dip;
 
+  // 指定された inode が含まれる inode ブロックを取得
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  // 指定された inode のオフセットを加算し inode のエントリのポインタを取得
   dip = (struct dinode*)bp->data + ip->inum%IPB;
+  // inode ブロックのブロックキャッシュを更新
   dip->type = ip->type;
   dip->major = ip->major;
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
+  // ブロックの変更をトランザクションに追加
   log_write(bp);
   brelse(bp);
 }
@@ -272,23 +283,30 @@ iget(uint dev, uint inum)
   // Is the inode already in the table?
   empty = 0;
   for(ip = &itable.inode[0]; ip < &itable.inode[NINODE]; ip++){
+    // 指定した inode が登録されていないか線形探索する
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
+      // 見つかったら参照数を増やしてそれを返す
       ip->ref++;
       release(&itable.lock);
       return ip;
     }
+    // 使っていないエントリがあったら覚えておく
     if(empty == 0 && ip->ref == 0)    // Remember empty slot.
       empty = ip;
   }
 
+  // inode に空きがなかったらどうしようもない
   // Recycle an inode entry.
   if(empty == 0)
     panic("iget: no inodes");
 
+  // inode のエントリを準備して返す
+  // この時点ではストレージへのアクセスはしていない
   ip = empty;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
+  // まだディスクの中の inode を読んでいないので invalid にしておく
   ip->valid = 0;
   release(&itable.lock);
 
@@ -320,15 +338,20 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
+    // まだストレージから inode を読んでいなければ読み出し
+    // 対応する inode ブロックを探して読み込み
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
+    // 中身をメモリ上のエントリにコピー
     ip->type = dip->type;
     ip->major = dip->major;
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
+    // inode ブロックの中身は変更しないので log_write は不要でリリースだけする
     brelse(bp);
+    // ストレージの inode を読んだので valid にする
     ip->valid = 1;
     if(ip->type == 0)
       panic("ilock: no type");
@@ -358,6 +381,9 @@ iput(struct inode *ip)
   acquire(&itable.lock);
 
   if(ip->ref == 1 && ip->valid && ip->nlink == 0){
+    // 指定された inode の参照数が1であり、valid なとき
+    // つまり、この iput により誰も使わなくなり、かつディスクから読み込んでいるとき
+    // これを解放する
     // inode has no links and no other references: truncate and free.
 
     // ip->ref == 1 means no other process can have ip locked,
@@ -366,9 +392,13 @@ iput(struct inode *ip)
 
     release(&itable.lock);
 
+    // ファイルを削除する(inode のサイズを0にすることでデータブロックを開放する)
     itrunc(ip);
+    // type を変更し未使用にする(有効な type は T_DIR, T_FILE, T_DEVICE のどれか)
     ip->type = 0;
+    // ふたたび更新(変更はマージされる)
     iupdate(ip);
+    // メモリ上の inode のキャッシュも未使用にする
     ip->valid = 0;
 
     releasesleep(&ip->lock);
@@ -449,12 +479,14 @@ itrunc(struct inode *ip)
   uint *a;
 
   for(i = 0; i < NDIRECT; i++){
+    // このファイルが保持している inode を順番に解放していく
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
 
+  // todo: 最後のひとつ(addrs[NDIRECT])にはなにが入っている…？
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
