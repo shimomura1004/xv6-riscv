@@ -61,6 +61,7 @@ bzero(int dev, int bno)
 
 // Blocks.
 
+// データブロックをひとつ確保し、ブロック番号を返す
 // Allocate a zeroed disk block.
 // returns 0 if out of disk space.
 static uint
@@ -435,10 +436,14 @@ bmap(struct inode *ip, uint bn)
   struct buf *bp;
 
   if(bn < NDIRECT){
+    // NDIRECT よりも小さいインデックスのブロックを要求された場合
     if((addr = ip->addrs[bn]) == 0){
+      // 未確保なら新たにブロックを確保する
       addr = balloc(ip->dev);
       if(addr == 0)
+        // 確保に失敗した場合
         return 0;
+      // 確保できたらアドレスを入れる
       ip->addrs[bn] = addr;
     }
     return addr;
@@ -446,16 +451,23 @@ bmap(struct inode *ip, uint bn)
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
+    // NDIRECT に収まらない、後ろのほうのインデックスだった場合
+    // まず INDIRECT なアドレス(実際にはブロック番号)を記憶するためのブロックを読み出す
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0){
+      // INDIRECT 用のブロックがなかったらまずそれを確保
+      // addr にはブロック番号が入る
       addr = balloc(ip->dev);
       if(addr == 0)
         return 0;
       ip->addrs[NDIRECT] = addr;
     }
+    // INDIRECT 用のブロックを読み出し
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
+    // 指定されたインデックスに対応するブロックを読み出し
     if((addr = a[bn]) == 0){
+      // まだ未確保なら確保
       addr = balloc(ip->dev);
       if(addr){
         a[bn] = addr;
@@ -466,6 +478,7 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  // インデックスが大きすぎたら(NDIRECT + NINDIRECT を超えたら)エラー終了
   panic("bmap: out of range");
 }
 
@@ -479,22 +492,27 @@ itrunc(struct inode *ip)
   uint *a;
 
   for(i = 0; i < NDIRECT; i++){
-    // このファイルが保持している inode を順番に解放していく
+    // この inode が保持している DIRECT なデータブロックを順番に解放していく
+    // ip->addrs[i] にはブロック番号が入っている
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
 
-  // todo: 最後のひとつ(addrs[NDIRECT])にはなにが入っている…？
+  // 最後のひとつ(addrs[NDIRECT])には INDIRECT なアドレスを覚えているブロックの番号が入っている
   if(ip->addrs[NDIRECT]){
+    // もし ip->addrs[NDIRECT] が 0 じゃなかったら INDIRECT なデータブロックを持つということ
+    // まずアドレスを覚えているブロックを読み出して
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
+      // INDIRECT なデータブロックを順番に解放して
       if(a[j])
         bfree(ip->dev, a[j]);
     }
     brelse(bp);
+    // 最後にアドレスを覚えていたブロック自体も開放し、ブロック番号も 0 にクリアする
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
@@ -526,16 +544,26 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
   struct buf *bp;
 
   if(off > ip->size || off + n < off)
+    // オフセットが大きすぎたり、読み込みサイズが大きすぎるときはエラー
     return 0;
   if(off + n > ip->size)
+    // 読み込みサイズが終端を超えるときは縮める
     n = ip->size - off;
 
+  // m は前回ループで読み込んだデータ数、読み込み位置をずらしながらループしている
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
+    // オフセットをブロックサイズで割り、何番目のブロックが必要かを計算
+    // bmap でその位置のブロックのインデックスを取得
     uint addr = bmap(ip, off/BSIZE);
     if(addr == 0)
       break;
+    // ブロックを読み出す
     bp = bread(ip->dev, addr);
+    // 読み出し位置(offset)からブロックの終端までと
+    // 残りの読み出しバイト数を比較し、小さい方を選ぶ
+    // つまり、このブロックに対して読み取るバイト数 m を計算している
     m = min(n - tot, BSIZE - off%BSIZE);
+    // データをデータブロックから読み出し
     if(either_copyout(user_dst, dst, bp->data + (off % BSIZE), m) == -1) {
       brelse(bp);
       tot = -1;
@@ -562,14 +590,19 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
   if(off > ip->size || off + n < off)
     return -1;
   if(off + n > MAXFILE*BSIZE)
+    // 書き込みサイズがファイルの最大サイズを超えるときはエラー
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
+    // readi と同じでオフセット位置のデータブロックのインデックスを探す
     uint addr = bmap(ip, off/BSIZE);
     if(addr == 0)
       break;
+    // データブロックを読み込む
     bp = bread(ip->dev, addr);
+    // ブロック終端か、書き込むデータの末尾までの長さ m を計算
     m = min(n - tot, BSIZE - off%BSIZE);
+    // コピー
     if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
       brelse(bp);
       break;
@@ -578,6 +611,7 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     brelse(bp);
   }
 
+  // ファイルサイズが伸びた場合
   if(off > ip->size)
     ip->size = off;
 
