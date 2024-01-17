@@ -33,6 +33,7 @@ filealloc(void)
 
   acquire(&ftable.lock);
   for(f = ftable.file; f < ftable.file + NFILE; f++){
+    // ファイルの参照(ref)が 0 のものを探す
     if(f->ref == 0){
       f->ref = 1;
       release(&ftable.lock);
@@ -49,6 +50,7 @@ filedup(struct file *f)
 {
   acquire(&ftable.lock);
   if(f->ref < 1)
+    // 開いていないファイルは dup できない
     panic("filedup");
   f->ref++;
   release(&ftable.lock);
@@ -65,14 +67,17 @@ fileclose(struct file *f)
   if(f->ref < 1)
     panic("fileclose");
   if(--f->ref > 0){
+    // デクリメントしても 0 にならなかったら他に使っている人がいるので何もせず終了
     release(&ftable.lock);
     return;
   }
+  // ここにきたということは、ファイル f は誰も使っていないということなので閉じる
   ff = *f;
   f->ref = 0;
   f->type = FD_NONE;
   release(&ftable.lock);
 
+  // インタフェースは同じファイルでも、実体(ファイル or パイプ)によって閉じ方がかわる
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
   } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
@@ -111,11 +116,13 @@ fileread(struct file *f, uint64 addr, int n)
   if(f->readable == 0)
     return -1;
 
+  // ファイルの種類によって呼び分ける
   if(f->type == FD_PIPE){
     r = piperead(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
     if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
       return -1;
+    // デバイスファイルの場合はデバイスごとに違う(関数ポインタで設定される)
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
     ilock(f->ip);
@@ -146,6 +153,7 @@ filewrite(struct file *f, uint64 addr, int n)
       return -1;
     ret = devsw[f->major].write(1, addr, n);
   } else if(f->type == FD_INODE){
+    // max の計算式の意味はわからないが、一定サイズを超えないように writei を繰り返し呼ぶ
     // write a few blocks at a time to avoid exceeding
     // the maximum log transaction size, including
     // i-node, indirect block, allocation blocks,
