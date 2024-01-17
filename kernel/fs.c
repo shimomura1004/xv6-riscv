@@ -631,6 +631,7 @@ namecmp(const char *s, const char *t)
   return strncmp(s, t, DIRSIZ);
 }
 
+// 指定されたディレクトリの中で指定された名前のファイルを探す
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode*
@@ -642,16 +643,23 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
 
+  // エントリを1つずつみていく
   for(off = 0; off < dp->size; off += sizeof(de)){
+    // ディレクトリもデータブロックを使ってエントリを保持しているので、まずはそれを読む
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
     if(de.inum == 0)
+      // inode 番号が 0 のディレクトリは未使用
       continue;
     if(namecmp(name, de.name) == 0){
       // entry matches path element
       if(poff)
+        // 探しているエントリを見つけたらそのオフセットを記録
         *poff = off;
       inum = de.inum;
+      // iget は refcnt を増加させるので、もしディレクトリの中身を探している間に
+      // 他のプロセスがエントリを削除したとしてもエントリはいきなり削除されず
+      // 正しく動作できる
       return iget(dp->dev, inum);
     }
   }
@@ -682,6 +690,7 @@ dirlink(struct inode *dp, char *name, uint inum)
       break;
   }
 
+  // 変更したディレクトリエントリの部分を書き込む
   strncpy(de.name, name, DIRSIZ);
   de.inum = inum;
   if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
@@ -729,6 +738,7 @@ skipelem(char *path, char *name)
   return path;
 }
 
+// パスを表す文字列を受け取って
 // Look up and return the inode for a path name.
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
@@ -738,30 +748,41 @@ namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
 
+  // 探索の起点を決める(ルートディレクトリかカレントディレクトリ)
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
   else
     ip = idup(myproc()->cwd);
 
+  // パス文字列の先頭からディレクトリ名をひとつずつ切り出していく
   while((path = skipelem(path, name)) != 0){
     ilock(ip);
     if(ip->type != T_DIR){
+      // 今見ているエントリがディレクトリではなかったらエラー終了
       iunlockput(ip);
       return 0;
     }
     if(nameiparent && *path == '\0'){
+      // 見ているのが末尾のエントリで、かつ親を探すモード(nameiparent)だったら終了
       // Stop one level early.
       iunlock(ip);
       return ip;
     }
+    // skipelem によって切り出された先頭の名前を、ディレクトリのエントリから探す
     if((next = dirlookup(ip, name, 0)) == 0){
+      // 見つからなかったらエラー終了
       iunlockput(ip);
       return 0;
     }
     iunlockput(ip);
+    // 見つかったらディレクトリをひとつ潜ってループ
     ip = next;
   }
+  // 最後まで探しきってループを抜けた場合
   if(nameiparent){
+    // もし親を探していたら、ここにきてしまったらおかしい
+    // 最初の skipelem がいきなり 0 を返したらここにくる
+    // そのときは親がないのでエラー終了
     iput(ip);
     return 0;
   }
