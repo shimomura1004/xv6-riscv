@@ -19,6 +19,7 @@ struct pipe {
   int writeopen;  // write fd is still open
 };
 
+// パイプを新しく作成し、引数としてもらった2つの引数の参照先に file 構造体のポインタを入れる
 int
 pipealloc(struct file **f0, struct file **f1)
 {
@@ -26,19 +27,26 @@ pipealloc(struct file **f0, struct file **f1)
 
   pi = 0;
   *f0 = *f1 = 0;
+  // ファイル構造体を2つ確保
+  // 本物のファイルではないので inode の確保とかは不要
   if((*f0 = filealloc()) == 0 || (*f1 = filealloc()) == 0)
     goto bad;
+  // メモリを1ページ分確保
+  // ここでファイルをやりとりする
   if((pi = (struct pipe*)kalloc()) == 0)
     goto bad;
+  // 最初はパイプは読み書きの療法ができる
   pi->readopen = 1;
   pi->writeopen = 1;
   pi->nwrite = 0;
   pi->nread = 0;
   initlock(&pi->lock, "pipe");
+  // ひとつめの引数には読み取り用のファイル構造体を返す
   (*f0)->type = FD_PIPE;
   (*f0)->readable = 1;
   (*f0)->writable = 0;
   (*f0)->pipe = pi;
+  // ふたつめの引数には書き込み用のファイル構造体を返す
   (*f1)->type = FD_PIPE;
   (*f1)->readable = 0;
   (*f1)->writable = 1;

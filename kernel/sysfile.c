@@ -42,6 +42,8 @@ fdalloc(struct file *f)
   int fd;
   struct proc *p = myproc();
 
+  // プロセスは NOFILE 個のファイルまで開ける
+  // 開いたファイルの file 構造体は proc.ofile に記録されている
   for(fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd] == 0){
       p->ofile[fd] = f;
@@ -363,11 +365,14 @@ sys_open(void)
       return -1;
     }
   } else {
+    // CREATE フラグがない open の場合、既存のファイルを開く
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
     ilock(ip);
+    // 指定されたパスの inode がディレクトリだった場合は
+    // 読み取り専用として開いていなかったらエラー
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -375,12 +380,17 @@ sys_open(void)
     }
   }
 
+  // ここまでで、なにかしらのファイルを正しく開けている
+
+  // 開いたものがデバイスファイルの場合、メジャー番号が正しいことを確認
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
     return -1;
   }
 
+  // ファイルを確保
+  // 成功したら、さらにプロセスが開いたファイルとしてそれを登録
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -390,16 +400,22 @@ sys_open(void)
   }
 
   if(ip->type == T_DEVICE){
+    // デバイスを開いた場合は、file 構造体 f にメジャー番号も記録
     f->type = FD_DEVICE;
     f->major = ip->major;
   } else {
+    // デバイスでないなら普通のファイルかディレクトリ、つまり inode
     f->type = FD_INODE;
     f->off = 0;
   }
   f->ip = ip;
+  // 書き込み専用モードでなかったら読み取れる
   f->readable = !(omode & O_WRONLY);
+  // 書き込み専用モードか、読み書きモードだったら書き込める
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
+  // TRUNC フラグがついていたら itrunc を呼ぶ、つまりファイルを削除する
+  // todo: どういう状況？
   if((omode & O_TRUNC) && ip->type == T_FILE){
     itrunc(ip);
   }
@@ -532,17 +548,24 @@ sys_pipe(void)
   int fd0, fd1;
   struct proc *p = myproc();
 
+  // パイプのファイルディスクリプタを返すためのポインタを取得
   argaddr(0, &fdarray);
+  // パイプを確保、rf が読み取り用ファイル、wf が書き込み用ファイル
   if(pipealloc(&rf, &wf) < 0)
     return -1;
   fd0 = -1;
+  // pipealloc で確保した2つのファイル構造体にファイルディスクリプタを割り当て
+  // fdalloc 内で、プロセス構造体の ofile に登録される
   if((fd0 = fdalloc(rf)) < 0 || (fd1 = fdalloc(wf)) < 0){
+    // 失敗したら片付けしてから終了
     if(fd0 >= 0)
       p->ofile[fd0] = 0;
     fileclose(rf);
     fileclose(wf);
     return -1;
   }
+  // copyout でカーネル空間(fd0)からユーザ空間(fdarray)にデータをコピー
+  // 2つのディスクリプタ fd0 と fd1 を返す
   if(copyout(p->pagetable, fdarray, (char*)&fd0, sizeof(fd0)) < 0 ||
      copyout(p->pagetable, fdarray+sizeof(fd0), (char *)&fd1, sizeof(fd1)) < 0){
     p->ofile[fd0] = 0;

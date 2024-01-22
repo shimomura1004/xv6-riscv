@@ -33,7 +33,7 @@ filealloc(void)
 
   acquire(&ftable.lock);
   for(f = ftable.file; f < ftable.file + NFILE; f++){
-    // ファイルの参照(ref)が 0 のものを探す
+    // ファイルの参照(ref)が 0 のもの(使っていないもの)を探す
     if(f->ref == 0){
       f->ref = 1;
       release(&ftable.lock);
