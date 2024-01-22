@@ -119,6 +119,7 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
+// 存在するファイル(old)への新しいリンク(new)を作成する
 // Create the path new as a link to the same inode as old.
 uint64
 sys_link(void)
@@ -126,29 +127,37 @@ sys_link(void)
   char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
   struct inode *dp, *ip;
 
+  // システムコールの文字列引数2つを old と new にコピー
   if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
     return -1;
 
   begin_op();
   if((ip = namei(old)) == 0){
+    // old で指定されたファイルがない場合はエラー
     end_op();
     return -1;
   }
 
   ilock(ip);
   if(ip->type == T_DIR){
+    // 元ファイルとして指定されたものがディレクトリだったらエラー
     iunlockput(ip);
     end_op();
     return -1;
   }
 
+  // リンク数を増やす
   ip->nlink++;
   iupdate(ip);
   iunlock(ip);
 
+  // 新しいリンクとして指定されたパスの親ディレクトリの ip を dp に入れ、
+  // name には新しく作るファイル名を入れる
   if((dp = nameiparent(new, name)) == 0)
     goto bad;
   ilock(dp);
+  // デバイスをまたいでハードリンクを作ることはできない
+  // 同じデバイス内であればディレクトリに新しいエントリを追加
   if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
     iunlockput(dp);
     goto bad;
@@ -176,15 +185,18 @@ isdirempty(struct inode *dp)
   int off;
   struct dirent de;
 
+  // 先頭の2エントリ分を飛ばし、ディレクトリ dp の inode のエントリ数だけループ
   for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("isdirempty: readi");
     if(de.inum != 0)
+      // inode 番号が入っているということは空ではない
       return 0;
   }
   return 1;
 }
 
+// 指定されたパスのリンクを削除し、リンク数が 0 になったらファイル自体も消す
 uint64
 sys_unlink(void)
 {
@@ -193,10 +205,12 @@ sys_unlink(void)
   char name[DIRSIZ], path[MAXPATH];
   uint off;
 
+  // 引数から削除するパスを path にコピー
   if(argstr(0, path, MAXPATH) < 0)
     return -1;
 
   begin_op();
+  // まず削除したいパスの親ディレクトリと最後の要素の名前を入手
   if((dp = nameiparent(path, name)) == 0){
     end_op();
     return -1;
@@ -208,6 +222,7 @@ sys_unlink(void)
   if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
     goto bad;
 
+  // 見つけた親ディレクトリの子要素に name という名前のものがなかったらエラー
   if((ip = dirlookup(dp, name, &off)) == 0)
     goto bad;
   ilock(ip);
@@ -215,21 +230,28 @@ sys_unlink(void)
   if(ip->nlink < 1)
     panic("unlink: nlink < 1");
   if(ip->type == T_DIR && !isdirempty(ip)){
+    // ディレクトリを消す場合は、ディレクトリが空じゃないといけない
     iunlockput(ip);
     goto bad;
   }
 
+  // de を 0 クリア
   memset(&de, 0, sizeof(de));
+  // からっぽの dirent dp を、親ディレクトリの削除したいエントリのところ(off)に書き込み
   if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
     panic("unlink: writei");
   if(ip->type == T_DIR){
+    // 消したものがディレクトリだったら、dp の nlink を減らす
+    // todo: ディレクトリの nlink は子要素の数？
     dp->nlink--;
     iupdate(dp);
   }
   iunlockput(dp);
 
+  // 削除された inode (ip) のリンク数を減らす
   ip->nlink--;
   iupdate(ip);
+  // iunlockput 内で iput するので、リンク数が 0 になったらここで truncate される
   iunlockput(ip);
 
   end_op();
@@ -242,47 +264,59 @@ bad:
   return -1;
 }
 
+// 新しく inode に名前をつける(link は既に名前のついた inode に別名をつけるもの)
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
 
+  // 新規にファイルを追加したい親ディレクトリ(dp)を探す
   if((dp = nameiparent(path, name)) == 0)
     return 0;
 
   ilock(dp);
 
   if((ip = dirlookup(dp, name, 0)) != 0){
+    // 既に親ディレクトリ内に同じ名前のファイルがあった場合
+    // create を呼び出したシステムコール(open, mkdir, mkdev)によって動作を変える
     iunlockput(dp);
     ilock(ip);
     if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
+      // open から呼ばれた場合、見つかった同名のエントリがファイルなら成功
+      // よってそのまま見つかったエントリ(ip)を返す
       return ip;
+    // そうでない場合(mkdir や mkdev のとき、open だけどファイルじゃなかったとき)はエラー
     iunlockput(ip);
     return 0;
   }
 
+  // 同じ名前のファイルはなかったということなので、まず新しい未使用の inode を確保
   if((ip = ialloc(dp->dev, type)) == 0){
     iunlockput(dp);
     return 0;
   }
 
   ilock(ip);
+  // todo: デバイスファイルじゃないときの major/minor とは？
   ip->major = major;
   ip->minor = minor;
   ip->nlink = 1;
   iupdate(ip);
 
   if(type == T_DIR){  // Create . and .. entries.
+    // もし "." と ".." を参照数としてカウントしてしまうと 0 にならないので削除できなくなる
     // No ip->nlink++ for ".": avoid cyclic ref count.
     if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
       goto fail;
   }
 
+  // 新しく用意したファイル(ip)を親ディレクトリに追加
   if(dirlink(dp, name, ip->inum) < 0)
     goto fail;
 
   if(type == T_DIR){
+    // 新規に作ったのがディレクトリなら、親ディレクトリの参照数を増やす
     // now that success is guaranteed:
     dp->nlink++;  // for ".."
     iupdate(dp);
@@ -301,6 +335,7 @@ create(char *path, short type, short major, short minor)
   return 0;
 }
 
+// いわゆる open だが、単純に create を使うだけではない
 uint64
 sys_open(void)
 {
@@ -310,13 +345,18 @@ sys_open(void)
   struct inode *ip;
   int n;
 
+  // open 時のモードを omode に取り出す
   argint(1, &omode);
+  // 開くファイルのパスをコピー
   if((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
 
   begin_op();
 
   if(omode & O_CREATE){
+    // CREATE フラグつきで open しようとした場合
+    // 必ずファイルとして新規の inode に名前をつける
+    // todo: なぜ固定で T_FILE?
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
@@ -370,6 +410,7 @@ sys_open(void)
   return fd;
 }
 
+// いわゆる mkdir
 uint64
 sys_mkdir(void)
 {
@@ -377,6 +418,8 @@ sys_mkdir(void)
   struct inode *ip;
 
   begin_op();
+  // 引数のパスをコピーし、create でディレクトリを作る
+  // ディレクトリの場合は major/minor はどちらも 0
   if(argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
     end_op();
     return -1;
@@ -386,6 +429,7 @@ sys_mkdir(void)
   return 0;
 }
 
+// いわゆる mknod
 uint64
 sys_mknod(void)
 {
@@ -394,8 +438,10 @@ sys_mknod(void)
   int major, minor;
 
   begin_op();
+  // 作成するデバイスの major/minor 番号を取得
   argint(1, &major);
   argint(2, &minor);
+  // 作成するデバイスのパスを取得
   if((argstr(0, path, MAXPATH)) < 0 ||
      (ip = create(path, T_DEVICE, major, minor)) == 0){
     end_op();

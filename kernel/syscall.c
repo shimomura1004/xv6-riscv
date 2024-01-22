@@ -34,6 +34,7 @@ fetchstr(uint64 addr, char *buf, int max)
 }
 
 // システムコール呼び出し時の引数を trapframe から取り出す関数
+// n番目の引数を取得する
 // argint, argaddr, argstr は指定された型への変換も行う
 static uint64
 argraw(int n)
@@ -57,6 +58,7 @@ argraw(int n)
   return -1;
 }
 
+// n番目の引数を int として取り出し
 // Fetch the nth 32-bit system call argument.
 void
 argint(int n, int *ip)
@@ -64,6 +66,7 @@ argint(int n, int *ip)
   *ip = argraw(n);
 }
 
+// n番目の引数をポインタとして取り出し
 // Retrieve an argument as a pointer.
 // Doesn't check for legality, since
 // copyin/copyout will do that.
@@ -73,6 +76,7 @@ argaddr(int n, uint64 *ip)
   *ip = argraw(n);
 }
 
+// n番目の引数を文字列とし、buf で渡したアドレスにコピーする
 // Fetch the nth word-sized system call argument as a null-terminated string.
 // Copies into buf, at most max.
 // Returns string length if OK (including nul), -1 if error.

@@ -632,6 +632,7 @@ namecmp(const char *s, const char *t)
 }
 
 // 指定されたディレクトリの中で指定された名前のファイルを探す
+// poff には見つけたファイルのエントリのオフセットが入る
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode*
@@ -667,6 +668,7 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   return 0;
 }
 
+// ディレクトリにエントリを追加する
 // Write a new directory entry (name, inum) into the directory dp.
 // Returns 0 on success, -1 on failure (e.g. out of disk blocks).
 int
@@ -738,7 +740,9 @@ skipelem(char *path, char *name)
   return path;
 }
 
-// パスを表す文字列を受け取って
+// パスを表す文字列を受け取って、指定されたファイルの inode を返す
+// parent 引数が非 0 だったら、指定されたファイルの親ディレクトリの inode を返しつつ
+// name にパスの最後の要素のファイル名をコピーする
 // Look up and return the inode for a path name.
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
@@ -789,6 +793,7 @@ namex(char *path, int nameiparent, char *name)
   return ip;
 }
 
+// 指定されたパスに対応するファイルの inode を返す
 struct inode*
 namei(char *path)
 {
@@ -796,6 +801,8 @@ namei(char *path)
   return namex(path, 0, name);
 }
 
+// 指定されたパスに対応するファイルの親ディレクトリの inode を返し
+// パスの最後の要素のファイル名を name に入れる
 struct inode*
 nameiparent(char *path, char *name)
 {
