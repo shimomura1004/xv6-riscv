@@ -115,9 +115,12 @@ printf(char *fmt, ...)
     release(&pr.lock);
 }
 
+// 異常が発生したとき、動作し続けて問題を起こさないようループする
 void
 panic(char *s)
 {
+  // locking を 0 にすると、これ以降 printf するときにロックを取らなくなる
+  // panic 時に他プロセスがロックしていてログを出せない状況を防ぐため？
   pr.locking = 0;
   printf("panic: ");
   printf(s);
